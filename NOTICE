@@ -1,0 +1,23 @@
+DrawSeal — vérificateur de tirages
+Copyright 2026 SRL BUSINESS SPACE
+
+Ce produit inclut des logiciels développés par SRL BUSINESS SPACE
+(Avenue Louise 65/11, 1050 Bruxelles, Belgique — n° d'entreprise 0885.712.245),
+éditeur du service DrawSeal (https://drawseal.com).
+
+Distribué sous licence Apache, version 2.0 — voir le fichier LICENSE.
+
+---
+
+Ce paquet dépend de bibliothèques tierces, distribuées sous leurs propres
+licences et non couvertes par le présent avis :
+
+  - @noble/hashes  — Paul Miller — licence MIT
+  - @noble/curves  — Paul Miller — licence MIT
+
+---
+
+« DrawSeal » est une marque de SRL BUSINESS SPACE. La licence Apache 2.0
+porte sur le code, pas sur la marque : elle n'accorde aucun droit d'usage
+du nom ni du logo (article 6 de la licence). Un vérificateur tiers dérivé
+de ce code est le bienvenu, sous un autre nom.

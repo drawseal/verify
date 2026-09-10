@@ -1,0 +1,18 @@
+# Verrou d’empreinte du moteur de tirage — NE PAS ÉDITER À LA MAIN.
+#
+# Régénérer avec : node scripts/verifier-algorithm-lock.mjs --write
+#
+# Si l’empreinte ci-dessous a changé, la question à trancher en revue est la
+# suivante, et elle n’a que deux réponses :
+#
+#   - Le résultat d’un tirage cesse-t-il d’être reproductible par la version
+#     précédente (ordre de dérivation des graines, pondération, arbre de
+#     Merkle, choix du round drand, cascade, re-tirage) ? Alors incrémenter
+#     ALGORITHM_VERSION, sans quoi les vérificateurs déjà dans la nature
+#     déclareront « non conforme » des tirages honnêtes.
+#   - Sinon (renommage, commentaire, refactoring pur), garder la version : un
+#     incrément injustifié fait refuser de conclure sur des documents valides.
+
+algorithm_version = 1
+engine_digest = ef8b593fdc842203ec1b6778de1f73580128c965ea52a740ccab65dd5ebe5c33
+engine_files = 19
