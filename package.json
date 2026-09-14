@@ -1,6 +1,6 @@
 {
   "name": "@drawseal-com/verify",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Vérificateur indépendant des tirages DrawSeal — rejoue un tirage à partir de son document de vérification et dit s'il est conforme.",
   "license": "Apache-2.0",
   "type": "module",
