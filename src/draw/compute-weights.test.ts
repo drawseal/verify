@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { computeWeights } from './compute-weights.js';
 
 const participants = [
-  { id: 'a', referredByParticipantId: null },
-  { id: 'b', referredByParticipantId: 'a' }, // filleul de a
-  { id: 'c', referredByParticipantId: 'a' }, // filleul de a
-  { id: 'd', referredByParticipantId: 'excluded' }, // parrain non valide
+  { id: 'a', referredByParticipantId: null, suppliedEntries: 5 },
+  { id: 'b', referredByParticipantId: 'a', suppliedEntries: 1 }, // filleul de a
+  { id: 'c', referredByParticipantId: 'a', suppliedEntries: 3 }, // filleul de a
+  { id: 'd', referredByParticipantId: 'excluded', suppliedEntries: 1 }, // parrain non valide
 ];
 
 describe('computeWeights', () => {
@@ -55,5 +55,41 @@ describe('computeWeights', () => {
       referralBonusEntries: 0,
     });
     expect(out.every((p) => p.weight === 1)).toBe(true);
+  });
+});
+
+describe('computeWeights — mode supplied', () => {
+  it('reprend le nombre d’entrées porté par le participant', () => {
+    const out = computeWeights({
+      weightingMode: 'supplied',
+      validIds: ['a', 'b', 'c'],
+      participants,
+      referralBonusEntries: 5,
+    });
+    expect(out).toEqual([
+      { id: 'a', weight: 5 },
+      { id: 'b', weight: 1 },
+      { id: 'c', weight: 3 },
+    ]);
+  });
+
+  it('ignore le parrainage : seules les entrées fournies comptent', () => {
+    const out = computeWeights({
+      weightingMode: 'supplied',
+      validIds: ['a'],
+      participants,
+      referralBonusEntries: 100,
+    });
+    expect(out).toEqual([{ id: 'a', weight: 5 }]);
+  });
+
+  it('retombe à 1 pour un id absent de la liste des participants', () => {
+    const out = computeWeights({
+      weightingMode: 'supplied',
+      validIds: ['inconnu'],
+      participants,
+      referralBonusEntries: 0,
+    });
+    expect(out).toEqual([{ id: 'inconnu', weight: 1 }]);
   });
 });

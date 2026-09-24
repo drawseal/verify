@@ -32,6 +32,12 @@ Sept contrôles, tous nécessaires, aucun suffisant seul. `ok` ne vaut `true` qu
 | `redrawsOk`                                      | Chaque remplaçant, en cas de lot non réclamé, se recalcule à partir des seules valeurs publiques.                                                                                                               |
 | `recomputedMerkleRoot` / `recomputedFingerprint` | Les valeurs recalculées, à confronter vous-même à celles publiées et aux témoins externes.                                                                                                                      |
 
+Un huitième champ, `redrawsInconclusive`, n'est pas un contrôle : il dit que les re-tirages
+**n'ont pas pu être rejoués**, faute de données. Un seul cas le produit — pondération `supplied`
+avec une chaîne de désignations mais sans `referrals`, qui porte les entrées fournies. `redrawsOk`
+vaut alors `false` sans être un verdict : il dit « pas rejoué », pas « faux ». Un vérificateur qui
+ne peut pas recalculer doit refuser de conclure, jamais conclure à tort.
+
 ### Pourquoi une signature BLS valide ne suffit pas
 
 C'est le point le plus subtil du dispositif, et celui qu'une vérification naïve rate.

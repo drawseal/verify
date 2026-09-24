@@ -210,3 +210,72 @@ describe('verifyDraw', () => {
     expect(() => verifyDraw(tampered)).not.toThrow();
   });
 });
+
+/**
+ * Un vérificateur qui ne peut pas recalculer doit **refuser de conclure**, jamais conclure à
+ * tort. En pondération `supplied`, les poids viennent des entrées fournies publiées dans
+ * `referrals` : sans elles, ils ne se déduisent d'aucune autre donnée du document. Les ramener
+ * silencieusement à 1 rendait « ce tirage ne se vérifie pas » sur un tirage honnête — le seul
+ * mode d'échec que ce produit ne peut pas se permettre.
+ */
+describe('verifyDraw — re-tirages non concluants faute de données', () => {
+  const cascade = computeWinners(reveal).winners;
+  // Le rang 1 forfaite : son remplaçant est entièrement déterminé par les valeurs publiques,
+  // sur le pool privé des deux déjà désignés. On le **calcule** plutôt que de l'inventer, sans
+  // quoi la chaîne serait en écart et `replayed` ne prouverait rien.
+  const alreadyDesignated = cascade.map((w) => w.participantId);
+  const replacement = computeWinners({
+    ...reveal,
+    winnersCount: 1,
+    participants: participants.filter((p) => !alreadyDesignated.includes(p.id)),
+  }).winners[0]!.participantId;
+
+  function suppliedInput(): VerifyInput {
+    return {
+      ...buildVerifyInput(),
+      weightingMode: 'supplied',
+      designations: [
+        { order: 0, rank: 1, participantId: cascade[0]!.participantId, status: 'forfeited' },
+        { order: 1, rank: 2, participantId: cascade[1]!.participantId, status: 'confirmed' },
+        { order: 2, rank: 1, participantId: replacement, status: 'confirmed' },
+      ],
+    };
+  }
+
+  it('signale l’impossibilité de conclure plutôt qu’un verdict, en `supplied` sans `referrals`', () => {
+    const res = verifyDraw(suppliedInput());
+
+    expect(res.redrawsInconclusive).toBe(true);
+    // Rien n'a été rejoué : aucun verdict n'a été rendu sur des poids inventés.
+    expect(res.redrawCount).toBe(0);
+    expect(res.ok).toBe(false);
+  });
+
+  it('conclut normalement dès que les entrées fournies sont publiées', () => {
+    const res = verifyDraw({
+      ...suppliedInput(),
+      referrals: participants.map((p) => ({
+        id: p.id,
+        referredByParticipantId: null,
+        suppliedEntries: p.weight,
+      })),
+    });
+
+    expect(res.redrawsInconclusive).toBe(false);
+    expect(res.redrawsOk).toBe(true);
+    expect(res.redrawCount).toBe(1);
+  });
+
+  /**
+   * Le repli neutre reste juste en `equal` et en `weighted` sans graphe : les poids y valent 1
+   * par construction. Ce test interdit d'étendre l'abstention à ces modes, où elle priverait de
+   * verdict des tirages parfaitement vérifiables.
+   */
+  it('ne s’applique pas aux modes `equal` et `weighted`', () => {
+    for (const weightingMode of ['equal', 'weighted'] as const) {
+      const res = verifyDraw({ ...suppliedInput(), weightingMode });
+      expect(res.redrawsInconclusive).toBe(false);
+      expect(res.redrawCount).toBe(1);
+    }
+  });
+});

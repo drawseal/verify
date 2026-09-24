@@ -26,8 +26,27 @@
  * modification de `packages/verify/src/**` sans mouvement de cette constante rend la pipeline
  * rouge. La barrière est là parce que l'oubli est silencieux et que sa conséquence est une
  * fausse accusation.
+ *
+ * ## Historique
+ *
+ * - **1** — tirage programmé : cascade multi-lots, pondération par entrées, sceau de Merkle.
+ * - **2** — ajout de l'**instant gagnant** (`instant/instant-win.ts`). Un vérificateur v1 ne
+ *   sait pas rejouer ce type de tirage : il refusera donc de conclure sur un document qui
+ *   déclare la version 2, ce qui est le comportement voulu. Les tirages programmés, eux,
+ *   continuent de déclarer la version **1** — leur règle n'a pas bougé d'une ligne, et un
+ *   vérificateur ancien doit pouvoir les vérifier pour toujours.
+ * - **3** — ajout du **tirage de rattrapage** de l'instant gagnant
+ *   (`instant/instant-catchup.ts`), et du rattachement vérifiable des positions gagnantes à leurs
+ *   gagnants (`instant/instant-designations.ts`). Un vérificateur v2 recalcule bien les positions,
+ *   mais ignore qu'un rang laissé vacant a pu être pourvu par un second tirage, sur un second
+ *   round drand : il conclurait « non conforme » sur un rattrapage honnête. Il refuse donc de
+ *   conclure, ce qui est le comportement voulu.
+ *
+ *   Seuls les instants gagnants **qui activent le rattrapage** déclarent la 3 ; les autres restent
+ *   en 2, et les tirages programmés en 1. Une version ne se propage jamais à des documents dont la
+ *   règle n'a pas changé.
  */
-export const ALGORITHM_VERSION = 1;
+export const ALGORITHM_VERSION = 3;
 
 /** Verdict rendu avant toute vérification : peut-on seulement conclure sur ce document ? */
 export type AlgorithmVersionVerdict =

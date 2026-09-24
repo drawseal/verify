@@ -97,8 +97,25 @@ export interface VerifyResult {
    * Vaut `true` en l'absence de re-tirage — il n'y a alors rien à contredire. Un giveaway dont un
    * lot n'a pas été réclamé n'est donc plus déclaré invérifiable : il est déclaré conforme, avec
    * ses re-tirages rejoués.
+   *
+   * `false` **accompagné de** {@link redrawsInconclusive} ne dit pas « les re-tirages sont
+   * faux » : il dit « ils n'ont pas pu être rejoués ». Les deux se lisent ensemble.
    */
   redrawsOk: boolean;
+  /**
+   * Les données publiées ne permettent pas de rejouer les re-tirages, et aucun verdict n'a donc
+   * été rendu sur eux.
+   *
+   * Un seul cas le produit : pondération `supplied` avec une chaîne de désignations mais sans
+   * `referrals`, qui porte les entrées fournies. Elles ne se déduisent d'aucune autre donnée du
+   * document — les ramener à 1 rendrait un verdict **négatif** sur des poids inventés, donc
+   * « ce tirage ne se vérifie pas » sur un tirage honnête. Un vérificateur qui ne peut pas
+   * recalculer doit refuser de conclure, jamais conclure à tort.
+   *
+   * Le repli à 1 reste juste en `equal` et en `weighted` sans graphe, où les poids valent 1 par
+   * construction : ce drapeau n'y vaut jamais `true`.
+   */
+  redrawsInconclusive: boolean;
   /** Nombre de remplaçants effectivement rejoués. */
   redrawCount: number;
   recomputedFingerprint: string;
@@ -147,19 +164,35 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
   // annoncés à la cascade — le comportement historique, correct tant qu'aucun rang n'a été
   // re-tiré. Avec la chaîne, c'est elle qui fait foi : elle porte la cascade initiale **et** les
   // remplaçants, et chacun est recalculé.
+  const weightingMode = input.weightingMode ?? 'equal';
+  const hasChain = input.designations !== undefined && input.designations.length > 0;
+  // En `supplied`, les poids viennent des entrées fournies, publiées dans `referrals`. Sans
+  // elles, ils ne se déduisent d'aucune autre donnée du document : le repli neutre ci-dessous
+  // rendrait un verdict NÉGATIF sur des poids inventés — « ce tirage ne se vérifie pas » sur un
+  // tirage honnête, exactement ce qu'un vérificateur ne doit jamais faire. On s'abstient donc de
+  // rejouer, et on le dit (`redrawsInconclusive`). Le cas se présente à un tiers qui reconstruit
+  // son entrée, ou sur un document tronqué.
+  const redrawsInconclusive =
+    hasChain && weightingMode === 'supplied' && input.referrals === undefined;
   const chain =
-    input.designations !== undefined && input.designations.length > 0
+    hasChain && !redrawsInconclusive
       ? verifyRedraws({
           serverSeed: reveal.serverSeed,
           drandValue: reveal.drandValue,
           winnersCount: reveal.winnersCount,
-          weightingMode: input.weightingMode ?? 'equal',
+          weightingMode,
           sealedValidIds: reveal.participants.map((p) => p.id),
           referrals:
             input.referrals ??
-            reveal.participants.map((p) => ({ id: p.id, referredByParticipantId: null })),
+            // Repli neutre, réservé à `equal` et `weighted` sans graphe : les poids y valent 1
+            // par construction, donc le repli n'invente rien. `supplied` est exclu au-dessus.
+            reveal.participants.map((p) => ({
+              id: p.id,
+              referredByParticipantId: null,
+              suppliedEntries: 1,
+            })),
           referralBonusEntries: input.referralBonusEntries ?? 0,
-          designations: input.designations,
+          designations: input.designations!,
         })
       : undefined;
 
@@ -171,7 +204,9 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
           const claimed = claimedWinners.find((c) => c.rank === w.rank);
           return claimed !== undefined && claimed.participantId === w.participantId;
         });
-  const redrawsOk = chain === undefined ? true : chain.ok;
+  // `false` sans verdict : voir `redrawsInconclusive`. `ok` est faux dans les deux cas — un
+  // document qu'on ne peut pas rejouer n'est pas un document vérifié.
+  const redrawsOk = chain === undefined ? !redrawsInconclusive : chain.ok;
   const redrawCount = chain?.replayed ?? 0;
 
   return {
@@ -182,6 +217,7 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
     beaconOk,
     winnersOk,
     redrawsOk,
+    redrawsInconclusive,
     redrawCount,
     recomputedFingerprint: outcome.participantsFingerprint,
     recomputedMerkleRoot: recomputedRoot(reveal.participants),

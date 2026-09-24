@@ -1,6 +1,6 @@
 # Verrou d’empreinte du moteur de tirage — NE PAS ÉDITER À LA MAIN.
 #
-# Régénérer avec : node scripts/verifier-algorithm-lock.mjs --write
+# Régénérer avec : node scripts/verify-algorithm-lock.mjs --write
 #
 # Si l’empreinte ci-dessous a changé, la question à trancher en revue est la
 # suivante, et elle n’a que deux réponses :
@@ -13,6 +13,6 @@
 #   - Sinon (renommage, commentaire, refactoring pur), garder la version : un
 #     incrément injustifié fait refuser de conclure sur des documents valides.
 
-algorithm_version = 1
-engine_digest = ef8b593fdc842203ec1b6778de1f73580128c965ea52a740ccab65dd5ebe5c33
-engine_files = 19
+algorithm_version = 3
+engine_digest = 607ee69655a512e400f90828dbf880bbf7dae107ee68a8ffe5282c05dc37c178
+engine_files = 23

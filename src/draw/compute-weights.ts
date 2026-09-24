@@ -1,11 +1,19 @@
 import type { PoolParticipant } from './pool.js';
 
 /** Mode de pondération du pool, figé à la création du giveaway. */
-export type WeightingMode = 'equal' | 'weighted';
+export type WeightingMode = 'equal' | 'weighted' | 'supplied';
 
 export interface WeightInputParticipant {
   id: string;
   referredByParticipantId: string | null;
+  /**
+   * Entrées apportées par l'organisateur (mode `supplied`), entier ≥ 1.
+   *
+   * La plateforme n'observe pas cette quantité, elle la reçoit : c'est un nombre de billets
+   * vendus hors ligne. Elle entre telle quelle dans la feuille scellée, donc un participant
+   * peut vérifier son propre compte avant le tirage — c'est tout l'intérêt.
+   */
+  suppliedEntries: number;
 }
 
 export interface ComputeWeightsInput {
@@ -21,7 +29,9 @@ export interface ComputeWeightsInput {
 /**
  * Pondération **déterministe** du pool pour le tirage :
  *  - `equal` → poids 1 pour tous ;
- *  - `weighted` → `1 + referralBonusEntries × (nb de filleuls valides du participant)`.
+ *  - `weighted` → `1 + referralBonusEntries × (nb de filleuls valides du participant)` ;
+ *  - `supplied` → le nombre d'entrées porté par le participant (`suppliedEntries`), sans
+ *    parrainage : les entrées sont fournies par l'organisateur, pas construites par la plateforme.
  *
  * Seuls les filleuls **valides** (présents dans `validIds`, donc confirmés et non
  * exclus par l'anti-fraude) comptent → le parrainage est le seul bonus vérifiable
@@ -43,9 +53,19 @@ export function computeWeights(input: ComputeWeightsInput): PoolParticipant[] {
     }
   }
 
+  const suppliedById = new Map<string, number>();
+  if (input.weightingMode === 'supplied') {
+    for (const p of input.participants) {
+      suppliedById.set(p.id, p.suppliedEntries);
+    }
+  }
+
   return input.validIds.map((id) => {
     if (input.weightingMode === 'equal') {
       return { id, weight: 1 };
+    }
+    if (input.weightingMode === 'supplied') {
+      return { id, weight: suppliedById.get(id) ?? 1 };
     }
     return { id, weight: 1 + input.referralBonusEntries * (referralCount.get(id) ?? 0) };
   });
