@@ -28,15 +28,73 @@ Sept contrôles, tous nécessaires, aucun suffisant seul. `ok` ne vaut `true` qu
 | `poolSealOk`                                     | La racine de Merkle recalculée sur la liste révélée égale celle scellée, taille comprise : la liste tirée est celle figée à la clôture des inscriptions. Aucun participant ajouté, retiré ni réordonné depuis.  |
 | `sealOrderOk`                                    | La liste a été scellée pendant une fenêtre de round drand **antérieure** à celle du hasard employé. Au moment du scellement, ce hasard n'existait pas et n'était pas connaissable.                              |
 | `beaconOk`                                       | Le beacon drand est authentique (signature BLS valide sous la clé publique du réseau) **et** c'est bien celui engagé — même round, même randomness. Les trois conditions sont indissociables : voir ci-dessous. |
-| `winnersOk`                                      | Les gagnants recalculés, rang à rang, sont ceux annoncés.                                                                                                                                                       |
+| `winnersOk`                                      | Les gagnants recalculés, rang à rang, sont ceux annoncés. Avec une chaîne de désignations, ses poids sont ceux du sceau : voir ci-dessous.                                                                      |
 | `redrawsOk`                                      | Chaque remplaçant, en cas de lot non réclamé, se recalcule à partir des seules valeurs publiques.                                                                                                               |
 | `recomputedMerkleRoot` / `recomputedFingerprint` | Les valeurs recalculées, à confronter vous-même à celles publiées et aux témoins externes.                                                                                                                      |
 
 Un huitième champ, `redrawsInconclusive`, n'est pas un contrôle : il dit que les re-tirages
-**n'ont pas pu être rejoués**, faute de données. Un seul cas le produit — pondération `supplied`
-avec une chaîne de désignations mais sans `referrals`, qui porte les entrées fournies. `redrawsOk`
-vaut alors `false` sans être un verdict : il dit « pas rejoué », pas « faux ». Un vérificateur qui
-ne peut pas recalculer doit refuser de conclure, jamais conclure à tort.
+**n'ont pas pu être rejoués**, faute de données. Il ne se produit qu'avec une chaîne de
+désignations publiée sans `referrals` : en pondération `supplied`, dont les entrées fournies ne se
+déduisent de rien d'autre, ou quand les poids scellés ne valent pas tous 1 et que le graphe manque
+pour les recalculer. `redrawsOk` vaut alors `false` sans être un verdict : il dit « pas rejoué »,
+pas « faux ». Un vérificateur qui ne peut pas recalculer doit refuser de conclure, jamais conclure
+à tort.
+
+### Les poids du rejeu sont ceux du sceau
+
+Avec une chaîne de désignations, le rejeu recalcule les poids à partir de `weightingMode`,
+`referrals`, `referralBonusEntries` et `referralBonusCap`. Aucun de ces champs n'est couvert par un engagement :
+seule la feuille de Merkle (`id:poids`) l'est. Le vérificateur exige donc que ces entrées
+reproduisent **exactement** les poids scellés (une ligne de `referrals` par participant scellé, ni
+doublon ni intrus, et le même poids id pour id), et que la cascade initiale de la chaîne soit celle
+que le pool scellé désigne. Sinon `winnersOk` et `redrawsOk` sont faux : un document qui garde
+l'engagement, la graine, le beacon et le sceau d'un tirage honnête mais réécrit les poids pour
+faire gagner quelqu'un d'autre est rejeté.
+
+Limite connue : en pondération `weighted`, deux graphes de parrainage qui donnent les mêmes poids
+pleins (mêmes nombres de filleuls par parrain, arêtes permutées) peuvent donner des poids
+différents une fois des désignés retirés. Le graphe n'entre pas dans la feuille de Merkle : le
+gagnant initial est entièrement lié au sceau, un **remplaçant** en mode `weighted` ne l'est que
+par le graphe publié.
+
+### Plafond du bonus de parrainage (version 4)
+
+Depuis la version 4 d'algorithme, le bonus de parrainage d'une participation est plafonné :
+`poids = 1 + min(REFERRAL_BONUS_CAP, referralBonusEntries × filleuls valides)`, avec
+`REFERRAL_BONUS_CAP = 5`. Le plafond est une constante du moteur, jamais un réglage :
+`referralBonusCapFor(algorithmVersion)` le rend pour un document de version 4 ou plus, et `null`
+(aucun plafond) avant — les tirages antérieurs se rejouent à l'identique. Le document le publie
+dans `reveal.referralBonusCap`.
+
+Le graphe `referrals` publié est celui que la plateforme a **crédité** au scellement : une personne
+(même adresse, alias compris) n'y est jamais filleule d'elle-même, seule sa première participation
+valide peut y être filleule, et un parrainage est rattaché à la première participation valide du
+parrain. Cette règle se joue avant l'empreinte, sur des adresses que le vérificateur ne voit pas ;
+il rejoue les poids sur le graphe publié, qui est celui qui les a produits.
+
+### Les gagnants affichés sont ceux de la chaîne
+
+Avec une chaîne de désignations, `claimedWinners` — la liste que la page affiche — doit égaler
+**exactement** les désignations actives (non forfaitées) de la chaîne rejouée. Sinon `winnersOk`
+est faux : un verdict vert ne peut plus côtoyer un gagnant que la chaîne ne désigne pas.
+
+### Instant gagnant : `verifyInstantChain`
+
+Le rejeu d'un instant gagnant est exporté tel que la page publique l'exécute : positions gagnantes
+issues du beacon d'ouverture, rattachement position → rang → gagnant, tirage de rattrapage,
+remplacements après forfait, et gagnants affichés égaux à la chaîne active. La graine, les beacons
+et le sceau restent des contrôles distincts, à combiner par l'appelant. En plus du rejeu, il exige :
+
+- des numéros d'ordre bien formés — entiers dans `[1, maxEntries]`, une position par participation
+  et une participation par position (une position tenue par un id hors du pool scellé reste
+  légitime : participation non confirmée ou écartée, dont le rang gagnant reste vacant) ;
+- un rattrapage présent si et seulement si le règlement l'engageait et qu'un rang est resté vacant ;
+- des poids de rattrapage et de remplacement qui reproduisent ceux du sceau.
+
+Limite connue : les numéros d'ordre, `maxEntries`, le nombre de lots et le round de rattrapage ne
+sont couverts par aucun engagement publié chez un témoin. Celui qui écrit le dossier peut encore
+**permuter** des positions bien formées entre participations scellées. Le fermer exige de sceller
+les positions et d'engager ces paramètres : une évolution du format du sceau et des témoins.
 
 ### Pourquoi une signature BLS valide ne suffit pas
 

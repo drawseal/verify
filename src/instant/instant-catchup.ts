@@ -40,6 +40,8 @@ export interface InstantCatchupInput {
   /** Graphe de parrainage des participants valides — nécessaire pour recalculer les poids. */
   referrals: readonly WeightInputParticipant[];
   referralBonusEntries: number;
+  /** Plafond du bonus de parrainage (`null`/absent avant la version 4). */
+  referralBonusCap?: number | null;
   /** Participations déjà gagnantes, tous rangs confondus : elles ne peuvent pas regagner. */
   alreadyWinningIds: readonly string[];
   /** Rangs à pourvoir, dans n'importe quel ordre : ils sont triés ici. */
@@ -87,6 +89,7 @@ export function instantCatchup(input: InstantCatchupInput): InstantCatchupResult
       validIds: restants,
       participants: [...input.referrals],
       referralBonusEntries: input.referralBonusEntries,
+      referralBonusCap: input.referralBonusCap ?? null,
     });
     /*
      * Un seul gagnant par appel, et le rang entre dans la graine via `winnersCount` : sans cela,

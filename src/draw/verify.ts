@@ -9,6 +9,8 @@ import {
 import { verifyBeacon } from '../drand/verify-beacon.js';
 import { verifyRedraws, type Designation } from './verify-redraws.js';
 import type { WeightInputParticipant, WeightingMode } from './compute-weights.js';
+import { neutralReferrals, referralsReproduceSealedWeights } from './sealed-weights.js';
+import { activeWinnersMatch } from './active-winners.js';
 import type { DrandBeacon } from '../drand/chain-info.js';
 import type { DrawCommitment, DrawInput, DrawWinner } from './compute-winners.js';
 
@@ -58,12 +60,21 @@ export interface VerifyInput {
    * pas : `claimedWinners` ne porte que les gagnants **actifs**, donc le remplaçant d'un rang
    * re-tiré — confronté à la cascade d'origine, il ferait échouer la vérification d'un tirage
    * honnête. C'est le défaut que ce champ corrige.
+   *
+   * `claimedWinners` n'est pas ignoré pour autant : il doit égaler **exactement** les désignations
+   * actives (non forfaitées) de la chaîne, sans quoi `winnersOk` est faux. C'est cette liste que la
+   * page affiche ; le verdict doit porter sur elle.
    */
   designations?: Designation[];
   /** Graphe de parrainage des participants valides — sans lui, les poids ne se recalculent pas. */
   referrals?: WeightInputParticipant[];
   /** Entrées bonus par filleul valide (0 hors action de parrainage). */
   referralBonusEntries?: number;
+  /**
+   * Plafond du bonus de parrainage d'une participation (`referralBonusCapFor(algorithmVersion)`).
+   * Absent ou `null` : aucun plafond, la règle des giveaways antérieurs à la version 4.
+   */
+  referralBonusCap?: number | null;
   /** Mode de pondération employé, nécessaire au rejeu des re-tirages. */
   weightingMode?: WeightingMode;
 }
@@ -89,7 +100,14 @@ export interface VerifyResult {
    * rejoué. Les trois conditions sont indissociables — voir {@link verifyDraw}.
    */
   beaconOk: boolean;
-  /** Gagnants recalculés === gagnants annoncés (rang à rang). */
+  /**
+   * Gagnants recalculés === gagnants annoncés (rang à rang).
+   *
+   * Avec une chaîne de désignations, c'est elle qui est confrontée au calcul, et deux conditions
+   * s'ajoutent : les poids que son rejeu emploie reproduisent exactement ceux du pool scellé, et
+   * sa cascade initiale est celle que le pool scellé désigne. Des `referrals`, un `weightingMode`
+   * ou un `referralBonusEntries` incompatibles avec le sceau rendent donc ce contrôle faux.
+   */
   winnersOk: boolean;
   /**
    * Chaque remplaçant se recalcule à partir des seules valeurs publiques.
@@ -106,14 +124,16 @@ export interface VerifyResult {
    * Les données publiées ne permettent pas de rejouer les re-tirages, et aucun verdict n'a donc
    * été rendu sur eux.
    *
-   * Un seul cas le produit : pondération `supplied` avec une chaîne de désignations mais sans
-   * `referrals`, qui porte les entrées fournies. Elles ne se déduisent d'aucune autre donnée du
-   * document — les ramener à 1 rendrait un verdict **négatif** sur des poids inventés, donc
-   * « ce tirage ne se vérifie pas » sur un tirage honnête. Un vérificateur qui ne peut pas
-   * recalculer doit refuser de conclure, jamais conclure à tort.
+   * Il ne se produit qu'avec une chaîne de désignations publiée **sans** `referrals`, dans deux
+   * cas : la pondération `supplied`, dont les entrées fournies ne se déduisent d'aucune autre
+   * donnée du document ; et tout pool scellé dont les poids ne valent pas tous 1, que le repli
+   * neutre (poids 1) ne reproduit pas. Rejouer sur ce repli rendrait un verdict **négatif** sur des
+   * poids inventés, donc « ce tirage ne se vérifie pas » sur un tirage honnête. Un vérificateur qui
+   * ne peut pas recalculer doit refuser de conclure, jamais conclure à tort.
    *
-   * Le repli à 1 reste juste en `equal` et en `weighted` sans graphe, où les poids valent 1 par
-   * construction : ce drapeau n'y vaut jamais `true`.
+   * Le repli reste juste en `equal` et en `weighted` dont tous les poids scellés valent 1 : ce
+   * drapeau n'y vaut jamais `true`. Des `referrals` publiés mais incompatibles avec le sceau ne le
+   * lèvent pas non plus : le document est alors contredit, et le verdict est négatif.
    */
   redrawsInconclusive: boolean;
   /** Nombre de remplaçants effectivement rejoués. */
@@ -166,14 +186,39 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
   // remplaçants, et chacun est recalculé.
   const weightingMode = input.weightingMode ?? 'equal';
   const hasChain = input.designations !== undefined && input.designations.length > 0;
-  // En `supplied`, les poids viennent des entrées fournies, publiées dans `referrals`. Sans
-  // elles, ils ne se déduisent d'aucune autre donnée du document : le repli neutre ci-dessous
-  // rendrait un verdict NÉGATIF sur des poids inventés — « ce tirage ne se vérifie pas » sur un
-  // tirage honnête, exactement ce qu'un vérificateur ne doit jamais faire. On s'abstient donc de
-  // rejouer, et on le dit (`redrawsInconclusive`). Le cas se présente à un tiers qui reconstruit
-  // son entrée, ou sur un document tronqué.
+  // Repli neutre, réservé aux documents sans `referrals` : chaque participant scellé pèse 1. Il
+  // n'invente rien quand il reproduit les poids scellés (`equal`, ou `weighted` sans parrainage),
+  // et il est écarté sinon — voir `redrawsInconclusive` juste en dessous.
+  const referrals = input.referrals ?? neutralReferrals(reveal.participants);
+  const referralBonusEntries = input.referralBonusEntries ?? 0;
+  const referralBonusCap = input.referralBonusCap ?? null;
+  // Liaison au sceau des poids que la chaîne emploie. `weightingMode`, `referrals` et
+  // `referralBonusEntries` ne sont couverts par AUCUN engagement : seule la feuille de Merkle
+  // (`id:poids`) l'est. Sans cette égalité, un document gardait l'engagement, la graine, le
+  // beacon et le sceau d'un tirage honnête, réécrivait ces trois champs pour qu'un autre
+  // participant gagne, et passait les sept contrôles — après la révélation, n'importe qui pouvait
+  // le faire sur une copie du bundle public. Les entrées non scellées ne servent donc au rejeu
+  // que si elles reproduisent exactement les poids scellés.
+  const weightsBound =
+    hasChain &&
+    referralsReproduceSealedWeights(
+      reveal.participants,
+      weightingMode,
+      referrals,
+      referralBonusEntries,
+      referralBonusCap,
+    );
+  // Sans `referrals`, deux cas où le rejeu n'est pas possible, et où l'on s'abstient en le disant
+  // plutôt que de rendre un verdict NÉGATIF sur des poids inventés — « ce tirage ne se vérifie
+  // pas » sur un tirage honnête, exactement ce qu'un vérificateur ne doit jamais faire :
+  //  - `supplied` : les entrées fournies ne se déduisent d'aucune autre donnée du document ;
+  //  - tout mode dont les poids scellés ne sont pas tous à 1 : le repli neutre ne les reproduit
+  //    pas, donc le graphe manque.
+  // Le cas se présente à un tiers qui reconstruit son entrée, ou sur un document tronqué. Un
+  // document qui PUBLIE des `referrals` incompatibles avec le sceau n'est pas tronqué : il est
+  // contredit par le sceau, et le verdict est négatif.
   const redrawsInconclusive =
-    hasChain && weightingMode === 'supplied' && input.referrals === undefined;
+    hasChain && input.referrals === undefined && (weightingMode === 'supplied' || !weightsBound);
   const chain =
     hasChain && !redrawsInconclusive
       ? verifyRedraws({
@@ -182,23 +227,28 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
           winnersCount: reveal.winnersCount,
           weightingMode,
           sealedValidIds: reveal.participants.map((p) => p.id),
-          referrals:
-            input.referrals ??
-            // Repli neutre, réservé à `equal` et `weighted` sans graphe : les poids y valent 1
-            // par construction, donc le repli n'invente rien. `supplied` est exclu au-dessus.
-            reveal.participants.map((p) => ({
-              id: p.id,
-              referredByParticipantId: null,
-              suppliedEntries: 1,
-            })),
-          referralBonusEntries: input.referralBonusEntries ?? 0,
+          referrals,
+          referralBonusEntries,
+          referralBonusCap,
           designations: input.designations!,
         })
       : undefined;
+  // La cascade initiale de la chaîne confrontée DIRECTEMENT au pool scellé, sans passer par les
+  // poids recalculés : la première désignation de chaque rang doit être le gagnant que
+  // `computeWinners(reveal)` désigne. Redondant avec `weightsBound` tant que celui-ci tient — c'est
+  // voulu : la promesse centrale du produit ne repose pas sur un seul contrôle.
+  const initialCascadeOk =
+    chain !== undefined && initialCascadeMatches(input.designations!, outcome.winners);
+
+  // Les gagnants annoncés — ceux que la page affiche — doivent être exactement les désignations
+  // actives de la chaîne rejouée. Sans quoi le verdict porterait sur la chaîne et l'affichage sur
+  // une autre liste, que rien ne contrôlait.
+  const activeWinnersOk =
+    chain !== undefined && activeWinnersMatch(input.designations!, claimedWinners);
 
   const winnersOk =
     chain !== undefined
-      ? chain.ok
+      ? weightsBound && initialCascadeOk && activeWinnersOk && chain.ok
       : outcome.winners.length === claimedWinners.length &&
         outcome.winners.every((w) => {
           const claimed = claimedWinners.find((c) => c.rank === w.rank);
@@ -206,7 +256,7 @@ export function verifyDraw(input: VerifyInput): VerifyResult {
         });
   // `false` sans verdict : voir `redrawsInconclusive`. `ok` est faux dans les deux cas — un
   // document qu'on ne peut pas rejouer n'est pas un document vérifié.
-  const redrawsOk = chain === undefined ? !redrawsInconclusive : chain.ok;
+  const redrawsOk = chain === undefined ? !redrawsInconclusive : weightsBound && chain.ok;
   const redrawCount = chain?.replayed ?? 0;
 
   return {
@@ -234,4 +284,22 @@ function recomputedRoot(participants: DrawInput['participants']): string | null 
     return null;
   }
   return computePoolSeal(participants).merkleRoot;
+}
+
+/** La première désignation de chaque rang est-elle le gagnant que le pool scellé désigne ? */
+function initialCascadeMatches(designations: Designation[], sealedWinners: DrawWinner[]): boolean {
+  const ordered = [...designations].sort((a, b) => a.order - b.order);
+  const firstByRank = new Map<number, string>();
+  for (const d of ordered) {
+    if (!firstByRank.has(d.rank)) {
+      firstByRank.set(d.rank, d.participantId);
+    }
+  }
+  for (const [rank, participantId] of firstByRank) {
+    const expected = sealedWinners.find((w) => w.rank === rank);
+    if (expected === undefined || expected.participantId !== participantId) {
+      return false;
+    }
+  }
+  return true;
 }

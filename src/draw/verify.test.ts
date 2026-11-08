@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { verifyDraw } from './verify.js';
 import { computeWinners, commitServerSeed } from './compute-winners.js';
 import { computePoolSeal } from './pool-seal.js';
+import { computeWeights } from './compute-weights.js';
+import { verifyRedraws } from './verify-redraws.js';
 import type { VerifyInput } from './verify.js';
 import type { DrawInput } from './compute-winners.js';
 import type { PoolParticipant } from './pool.js';
@@ -233,6 +235,11 @@ describe('verifyDraw — re-tirages non concluants faute de données', () => {
   function suppliedInput(): VerifyInput {
     return {
       ...buildVerifyInput(),
+      // Les gagnants annoncés sont les désignations actives : le remplaçant au rang 1.
+      claimedWinners: [
+        { rank: 1, participantId: replacement },
+        { rank: 2, participantId: cascade[1]!.participantId },
+      ],
       weightingMode: 'supplied',
       designations: [
         { order: 0, rank: 1, participantId: cascade[0]!.participantId, status: 'forfeited' },
@@ -264,6 +271,7 @@ describe('verifyDraw — re-tirages non concluants faute de données', () => {
     expect(res.redrawsInconclusive).toBe(false);
     expect(res.redrawsOk).toBe(true);
     expect(res.redrawCount).toBe(1);
+    expect(res.ok).toBe(true);
   });
 
   /**
@@ -276,6 +284,285 @@ describe('verifyDraw — re-tirages non concluants faute de données', () => {
       const res = verifyDraw({ ...suppliedInput(), weightingMode });
       expect(res.redrawsInconclusive).toBe(false);
       expect(res.redrawCount).toBe(1);
+    }
+  });
+});
+
+/**
+ * Les poids employés par la chaîne de désignations doivent être **ceux du sceau**.
+ *
+ * Avec une chaîne publiée, le rejeu recalcule les poids à partir de `weightingMode`, `referrals`
+ * et `referralBonusEntries` — trois champs qu'aucun engagement ne couvre. Sans liaison au pool
+ * scellé, un document pouvait garder l'engagement, la graine, le beacon et le sceau d'un tirage
+ * honnête, réécrire ces trois champs pour qu'un autre participant gagne, et passer les sept
+ * contrôles. Après la révélation, n'importe qui pouvait le faire sur une copie du bundle public.
+ */
+describe('verifyDraw — poids de la chaîne liés au pool scellé', () => {
+  const single: DrawInput = { ...reveal, winnersCount: 1 };
+  const honest = computeWinners(single).winners[0]!.participantId;
+  // Le participant que le document falsifié désigne : n'importe qui sauf le vrai gagnant.
+  const forgedWinner = participants.find((p) => p.id !== honest)!.id;
+
+  function singleInput(): VerifyInput {
+    return {
+      ...buildVerifyInput(),
+      reveal: single,
+      claimedWinners: [{ rank: 1, participantId: forgedWinner }],
+    };
+  }
+
+  // Le document de la reproduction : pool scellé à poids égaux, entrées fournies inventées.
+  const forgedReferrals = participants.map((p) => ({
+    id: p.id,
+    referredByParticipantId: null,
+    suppliedEntries: p.id === forgedWinner ? 1_000_000 : 1,
+  }));
+
+  it('BLOQUANT : des entrées fournies inventées ne font pas gagner un autre participant', () => {
+    // Précondition : sur ces poids inventés, le rejeu de la chaîne désigne bien le faux gagnant.
+    // Sans elle, l'échec ci-dessous ne prouverait rien sur l'attaque.
+    expect(
+      verifyRedraws({
+        serverSeed: single.serverSeed,
+        drandValue: single.drandValue,
+        winnersCount: 1,
+        weightingMode: 'supplied',
+        sealedValidIds: participants.map((p) => p.id),
+        referrals: forgedReferrals,
+        referralBonusEntries: 0,
+        designations: [{ order: 0, rank: 1, participantId: forgedWinner, status: 'pending' }],
+      }).ok,
+    ).toBe(true);
+
+    const res = verifyDraw({
+      ...singleInput(),
+      weightingMode: 'supplied',
+      referrals: forgedReferrals,
+      designations: [{ order: 0, rank: 1, participantId: forgedWinner, status: 'pending' }],
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.winnersOk).toBe(false);
+    expect(res.redrawsOk).toBe(false);
+    // L'échec porte bien sur les poids : tout ce que couvrent les engagements est intact.
+    expect(res.seedHashOk).toBe(true);
+    expect(res.poolSealOk).toBe(true);
+    expect(res.sealOrderOk).toBe(true);
+    expect(res.beaconOk).toBe(true);
+  });
+
+  it('BLOQUANT : un graphe de parrainage inventé ne fait pas gagner un autre participant', () => {
+    // Bonus énorme, quatre filleuls rattachés au faux gagnant : le pool scellé, lui, est à poids
+    // égaux. Le mode annoncé ne change rien à l'affaire.
+    const res = verifyDraw({
+      ...singleInput(),
+      weightingMode: 'weighted',
+      referralBonusEntries: 1_000_000,
+      referrals: participants.map((p) => ({
+        id: p.id,
+        referredByParticipantId: p.id === forgedWinner ? null : forgedWinner,
+        suppliedEntries: 1,
+      })),
+      designations: [{ order: 0, rank: 1, participantId: forgedWinner, status: 'pending' }],
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.winnersOk).toBe(false);
+    expect(res.poolSealOk).toBe(true);
+  });
+
+  it('BLOQUANT : une cascade initiale qui n’est pas celle du pool scellé échoue', () => {
+    const res = verifyDraw({
+      ...singleInput(),
+      designations: [{ order: 0, rank: 1, participantId: forgedWinner, status: 'pending' }],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.winnersOk).toBe(false);
+  });
+
+  it('BLOQUANT : des lignes de parrainage dupliquées ou étrangères au pool scellé échouent', () => {
+    // Un filleul compté deux fois donne au parrain le poids scellé, mais lui en retire deux d'un
+    // coup quand ce filleul est désigné : le pool d'un re-tirage cesserait de dériver du sceau.
+    const sealed: PoolParticipant[] = [
+      { id: 'p1', weight: 3 },
+      { id: 'p2', weight: 1 },
+      { id: 'p3', weight: 1 },
+      { id: 'p4', weight: 1 },
+    ];
+    const sealedReveal: DrawInput = { ...single, participants: sealed };
+    const winner = computeWinners(sealedReveal).winners[0]!.participantId;
+    const base: VerifyInput = {
+      ...buildVerifyInput(),
+      reveal: sealedReveal,
+      seal: { ...computePoolSeal(sealed), sealRound: REAL_BEACON.round - 1 },
+      claimedWinners: [{ rank: 1, participantId: winner }],
+      weightingMode: 'weighted',
+      referralBonusEntries: 1,
+      designations: [{ order: 0, rank: 1, participantId: winner, status: 'pending' }],
+    };
+    const row = (id: string, sponsor: string | null) => ({
+      id,
+      referredByParticipantId: sponsor,
+      suppliedEntries: 1,
+    });
+
+    // Témoin : le graphe honnête (p2 et p3 filleuls de p1) se vérifie.
+    const honestGraph = [row('p1', null), row('p2', 'p1'), row('p3', 'p1'), row('p4', null)];
+    expect(verifyDraw({ ...base, referrals: honestGraph }).ok).toBe(true);
+
+    // Même nombre de lignes, mêmes poids pleins (p1 = 1 + 2) : seule la ligne de p3 a disparu.
+    const duplicated = [row('p1', null), row('p2', 'p1'), row('p2', 'p1'), row('p4', null)];
+    const res = verifyDraw({ ...base, referrals: duplicated });
+    expect(res.ok).toBe(false);
+    expect(res.winnersOk).toBe(false);
+
+    const outsider = [...honestGraph, row('intrus', null)];
+    expect(verifyDraw({ ...base, referrals: outsider }).ok).toBe(false);
+  });
+
+  it('un tirage pondéré honnête, re-tirage compris, reste vérifiable', () => {
+    // p1 parraine p2 et p3 : son poids scellé est 1 + 2 × 2 = 5. Le re-tirage recalcule les
+    // poids sur le pool réduit, d'après le même graphe — c'est ce que le sceau rend contrôlable.
+    const graph = [
+      { id: 'p1', referredByParticipantId: null, suppliedEntries: 1 },
+      { id: 'p2', referredByParticipantId: 'p1', suppliedEntries: 1 },
+      { id: 'p3', referredByParticipantId: 'p1', suppliedEntries: 1 },
+      { id: 'p4', referredByParticipantId: null, suppliedEntries: 1 },
+    ];
+    const ids = graph.map((g) => g.id);
+    const weigh = (validIds: string[]) =>
+      computeWeights({
+        weightingMode: 'weighted',
+        validIds,
+        participants: graph,
+        referralBonusEntries: 2,
+      });
+    const sealed = weigh(ids);
+    const sealedReveal: DrawInput = { ...single, participants: sealed };
+    const first = computeWinners(sealedReveal).winners[0]!.participantId;
+    const replacement = computeWinners({
+      ...sealedReveal,
+      participants: weigh(ids.filter((id) => id !== first)),
+    }).winners[0]!.participantId;
+
+    const res = verifyDraw({
+      ...buildVerifyInput(),
+      reveal: sealedReveal,
+      seal: { ...computePoolSeal(sealed), sealRound: REAL_BEACON.round - 1 },
+      claimedWinners: [{ rank: 1, participantId: replacement }],
+      weightingMode: 'weighted',
+      referralBonusEntries: 2,
+      referrals: graph,
+      designations: [
+        { order: 0, rank: 1, participantId: first, status: 'forfeited' },
+        { order: 1, rank: 1, participantId: replacement, status: 'confirmed' },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.redrawCount).toBe(1);
+  });
+
+  it('refuse de conclure, sans accuser, sur un document pondéré privé de son graphe', () => {
+    // Poids scellés > 1 et pas de `referrals` : le repli à 1 ne les reproduit pas. Ce n'est pas
+    // une falsification démontrée, c'est un document qui ne permet pas de rejouer.
+    const sealed: PoolParticipant[] = [
+      { id: 'p1', weight: 3 },
+      { id: 'p2', weight: 1 },
+      { id: 'p3', weight: 1 },
+      { id: 'p4', weight: 1 },
+    ];
+    const sealedReveal: DrawInput = { ...single, participants: sealed };
+    const winner = computeWinners(sealedReveal).winners[0]!.participantId;
+    const res = verifyDraw({
+      ...buildVerifyInput(),
+      reveal: sealedReveal,
+      seal: { ...computePoolSeal(sealed), sealRound: REAL_BEACON.round - 1 },
+      claimedWinners: [{ rank: 1, participantId: winner }],
+      weightingMode: 'weighted',
+      referralBonusEntries: 1,
+      designations: [{ order: 0, rank: 1, participantId: winner, status: 'pending' }],
+    });
+
+    expect(res.redrawsInconclusive).toBe(true);
+    expect(res.redrawCount).toBe(0);
+    expect(res.ok).toBe(false);
+  });
+});
+
+/**
+ * Les gagnants affichés sont ceux de la chaîne vérifiée.
+ *
+ * Avec une chaîne, le verdict la rejoue ; la page, elle, affiche `claimedWinners` (le
+ * `bundle.winners` du serveur). Tant que rien ne les confrontait, un badge « vérifié » pouvait
+ * côtoyer un gagnant que la chaîne ne désigne pas — reproduit par le scan : chaîne honnête,
+ * `winners` réécrit vers un perdant, verdict entièrement vert.
+ */
+describe('verifyDraw — gagnants annoncés liés à la chaîne', () => {
+  const single: DrawInput = { ...reveal, winnersCount: 1 };
+  const trueWinner = computeWinners(single).winners[0]!.participantId;
+  const fake = participants.find((p) => p.id !== trueWinner)!.id;
+  const chainInput = (claimed: string[]): VerifyInput => ({
+    ...buildVerifyInput(),
+    reveal: single,
+    claimedWinners: claimed.map((participantId) => ({ rank: 1, participantId })),
+    weightingMode: 'equal',
+    referrals: participants.map((p) => ({
+      id: p.id,
+      referredByParticipantId: null,
+      suppliedEntries: 1,
+    })),
+    designations: [{ order: 0, rank: 1, participantId: trueWinner, status: 'pending' }],
+  });
+
+  it('témoin : chaîne honnête et gagnants annoncés concordants → conforme', () => {
+    expect(verifyDraw(chainInput([trueWinner])).ok).toBe(true);
+  });
+
+  it('BLOQUANT : un gagnant affiché qui n’est pas celui de la chaîne invalide le verdict', () => {
+    const res = verifyDraw(chainInput([fake]));
+    expect(res.winnersOk).toBe(false);
+    expect(res.ok).toBe(false);
+    // La chaîne, elle, est intacte : l'échec porte bien sur la liste affichée.
+    expect(res.redrawsOk).toBe(true);
+  });
+
+  it('BLOQUANT : un gagnant affiché en trop, ou manquant, invalide le verdict', () => {
+    expect(verifyDraw(chainInput([trueWinner, fake])).ok).toBe(false);
+    expect(verifyDraw(chainInput([])).ok).toBe(false);
+  });
+
+  it('BLOQUANT : un gagnant forfaité encore affiché invalide le verdict', () => {
+    const res = verifyDraw({
+      ...chainInput([trueWinner]),
+      designations: [{ order: 0, rank: 1, participantId: trueWinner, status: 'forfeited' }],
+    });
+    expect(res.winnersOk).toBe(false);
+  });
+
+  /*
+   * Reproduction de l'audit : engagement, graine, beacon, sceau et désignation initiale honnêtes ;
+   * la désignation initiale est forfaitée, et une désignation forgée reprend son ordre pour
+   * nommer un participant que rien n'a désigné. Elle était classée initiale, donc jamais rejouée,
+   * et les sept contrôles passaient.
+   */
+  it('BLOQUANT : une désignation forgée qui reprend l’ordre de la désignation initiale échoue', () => {
+    const aliases: Array<[number, number]> = [
+      [0, 0],
+      [Number.NaN, Number.NaN],
+      [0, -0],
+    ];
+    for (const [a, b] of aliases) {
+      const res = verifyDraw({
+        ...chainInput([fake]),
+        designations: [
+          { order: a, rank: 1, participantId: trueWinner, status: 'forfeited' },
+          { order: b, rank: 1, participantId: fake, status: 'pending' },
+        ],
+      });
+      expect(res.winnersOk).toBe(false);
+      expect(res.redrawsOk).toBe(false);
+      expect(res.ok).toBe(false);
     }
   });
 });

@@ -17,3 +17,9 @@ export {
   type InstantCatchupResult,
   type InstantCatchupWinner,
 } from './instant-catchup.js';
+export {
+  verifyInstantChain,
+  type InstantChainDesignation,
+  type VerifyInstantChainInput,
+  type VerifyInstantChainResult,
+} from './verify-instant-chain.js';

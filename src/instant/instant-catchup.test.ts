@@ -6,7 +6,11 @@ const base = {
   catchupDrandValue: '77aa'.repeat(16),
   weightingMode: 'equal' as const,
   sealedValidIds: ['a', 'b', 'c', 'd', 'e'],
-  referrals: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, referredByParticipantId: null })),
+  referrals: ['a', 'b', 'c', 'd', 'e'].map((id) => ({
+    id,
+    referredByParticipantId: null,
+    suppliedEntries: 1,
+  })),
   referralBonusEntries: 0,
   alreadyWinningIds: ['a'],
   vacantRanks: [2, 3],
@@ -53,8 +57,8 @@ describe('instantCatchup', () => {
       ...base,
       sealedValidIds: ['a', 'b'],
       referrals: [
-        { id: 'a', referredByParticipantId: null },
-        { id: 'b', referredByParticipantId: null },
+        { id: 'a', referredByParticipantId: null, suppliedEntries: 1 },
+        { id: 'b', referredByParticipantId: null, suppliedEntries: 1 },
       ],
       vacantRanks: [2, 3],
     });

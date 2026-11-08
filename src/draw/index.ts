@@ -36,10 +36,15 @@ export type {
 } from './verify-redraws.js';
 export {
   computeWeights,
+  REFERRAL_BONUS_CAP,
+  REFERRAL_CAP_ALGORITHM_VERSION,
+  referralBonusCapFor,
   type ComputeWeightsInput,
   type WeightInputParticipant,
   type WeightingMode,
 } from './compute-weights.js';
+export { referralsReproduceSealedWeights, neutralReferrals } from './sealed-weights.js';
+export { activeWinnersMatch, type RankedWinner, type ChainEntry } from './active-winners.js';
 export {
   buildWitnessPayload,
   witnessPayloadSha256,

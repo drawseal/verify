@@ -8,7 +8,11 @@ const DRAND = 'f'.repeat(64);
 
 /** Quatre participants sans parrainage : les poids valent 1 et ne bougent pas. */
 const FLAT_IDS = ['p1', 'p2', 'p3', 'p4'];
-const flatParticipants = FLAT_IDS.map((id) => ({ id, referredByParticipantId: null }));
+const flatParticipants = FLAT_IDS.map((id) => ({
+  id,
+  referredByParticipantId: null,
+  suppliedEntries: 1,
+}));
 
 function flatInput(over: Partial<Parameters<typeof verifyRedraws>[0]> = {}) {
   return {
@@ -161,10 +165,10 @@ describe('verifyRedraws', () => {
   it('BLOQUANT : en mode pondéré, les poids sont recalculés sur le pool réduit', () => {
     const ids = ['sponsor', 'filleul1', 'filleul2', 'autre'];
     const referrals = [
-      { id: 'sponsor', referredByParticipantId: null },
-      { id: 'filleul1', referredByParticipantId: 'sponsor' },
-      { id: 'filleul2', referredByParticipantId: 'sponsor' },
-      { id: 'autre', referredByParticipantId: null },
+      { id: 'sponsor', referredByParticipantId: null, suppliedEntries: 1 },
+      { id: 'filleul1', referredByParticipantId: 'sponsor', suppliedEntries: 1 },
+      { id: 'filleul2', referredByParticipantId: 'sponsor', suppliedEntries: 1 },
+      { id: 'autre', referredByParticipantId: null, suppliedEntries: 1 },
     ];
     const weighted = (validIds: string[]) =>
       computeWeights({
@@ -239,5 +243,74 @@ describe('verifyRedraws', () => {
     const result = verifyRedraws(flatInput({ designations }));
     expect(result.ok).toBe(true);
     expect(result.poolExhausted).toBe(true);
+  });
+
+  /*
+   * Une chaîne dont la structure n'est pas celle qu'une attribution honnête produit. La plateforme
+   * numérote les désignations 0, 1, 2… et ne crée un remplaçant qu'en forfaitant, dans la même
+   * transaction, la désignation active du rang. Avant ce contrôle, le partage cascade initiale /
+   * remplaçants se faisait sur la VALEUR de `order` : une désignation forgée qui reprenait l'ordre
+   * d'une désignation initiale (ou un alias NaN, -0) était classée initiale et jamais rejouée.
+   */
+  describe('chaîne mal formée', () => {
+    const [initial] = honestInitial(1);
+    const chosen = FLAT_IDS.find((id) => id !== initial)!;
+
+    it('BLOQUANT : un remplaçant qui reprend l’ordre d’une désignation initiale est refusé', () => {
+      const aliases: Array<[number, number]> = [
+        [0, 0],
+        [Number.NaN, Number.NaN],
+        [0, -0],
+      ];
+      for (const [a, b] of aliases) {
+        const result = verifyRedraws(
+          flatInput({
+            designations: [
+              { order: a, rank: 1, participantId: initial, status: 'forfeited' },
+              { order: b, rank: 1, participantId: chosen, status: 'pending' },
+            ],
+          }),
+        );
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it('BLOQUANT : un ordre négatif ou non entier est refusé', () => {
+      for (const order of [-1, 0.5, Number.POSITIVE_INFINITY]) {
+        const result = verifyRedraws(
+          flatInput({
+            designations: [{ order, rank: 1, participantId: initial, status: 'pending' }],
+          }),
+        );
+        expect(result.ok).toBe(false);
+      }
+    });
+
+    it('BLOQUANT : un remplaçant sans forfait préalable du même rang est refusé', () => {
+      const replacement = honestReplacement([initial]);
+      const result = verifyRedraws(
+        flatInput({
+          designations: [
+            { order: 0, rank: 1, participantId: initial, status: 'pending' },
+            { order: 1, rank: 1, participantId: replacement, status: 'pending' },
+          ],
+        }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it('BLOQUANT : un rang hors de [1, winnersCount] ou non entier est refusé', () => {
+      for (const rank of [0, -1, 2, 1.5]) {
+        const result = verifyRedraws(
+          flatInput({
+            designations: [
+              { order: 0, rank: 1, participantId: initial, status: 'pending' },
+              { order: 1, rank, participantId: chosen, status: 'pending' },
+            ],
+          }),
+        );
+        expect(result.ok).toBe(false);
+      }
+    });
   });
 });

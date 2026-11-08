@@ -45,8 +45,22 @@
  *   Seuls les instants gagnants **qui activent le rattrapage** déclarent la 3 ; les autres restent
  *   en 2, et les tirages programmés en 1. Une version ne se propage jamais à des documents dont la
  *   règle n'a pas changé.
+ * - **4** — **plafond du bonus de parrainage** (`REFERRAL_BONUS_CAP`, +5 entrées par
+ *   participation, `draw/compute-weights.ts`). Un vérificateur v3 recalculerait sans plafond les
+ *   poids des pools réduits (re-tirage, rattrapage) et conclurait « non conforme » sur un tirage
+ *   honnête : il refuse donc de conclure, ce qui est le comportement voulu.
+ *
+ *   Seuls les giveaways en pondération `weighted` créés depuis déclarent la 4 — les seuls où le
+ *   plafond peut jouer. Les autres gardent leur version, et les giveaways `weighted` antérieurs
+ *   gardent la leur et leurs poids sans plafond : leurs sceaux se rejouent à l'identique.
+ *
+ *   L'exclusion de l'**auto-parrainage** (une personne — même adresse, alias compris — ne compte
+ *   jamais comme son propre filleul, et seule sa première participation valide peut compter comme
+ *   filleul) n'est PAS une règle de ce moteur : elle s'applique au graphe de parrainage avant le
+ *   scellement, côté plateforme, et le graphe publié est déjà celui qui a servi. Le vérificateur
+ *   n'a rien de plus à savoir pour la rejouer.
  */
-export const ALGORITHM_VERSION = 3;
+export const ALGORITHM_VERSION = 4;
 
 /** Verdict rendu avant toute vérification : peut-on seulement conclure sur ce document ? */
 export type AlgorithmVersionVerdict =

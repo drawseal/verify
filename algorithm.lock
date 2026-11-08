@@ -13,6 +13,6 @@
 #   - Sinon (renommage, commentaire, refactoring pur), garder la version : un
 #     incrément injustifié fait refuser de conclure sur des documents valides.
 
-algorithm_version = 3
-engine_digest = 607ee69655a512e400f90828dbf880bbf7dae107ee68a8ffe5282c05dc37c178
-engine_files = 23
+algorithm_version = 4
+engine_digest = 59dadf0cbc72ae622eb1687b69d1876acd29c55456891a2d1ab9f89cb6773b46
+engine_files = 27

@@ -4,6 +4,7 @@ import {
   type WeightingMode,
 } from './compute-weights.js';
 import { computeWinners } from './compute-winners.js';
+import { chainWellFormed } from './chain-structure.js';
 
 /**
  * Une désignation de gagnant, telle que publiée : la cascade initiale et chaque remplaçant
@@ -36,6 +37,8 @@ export interface VerifyRedrawsInput {
   referrals: WeightInputParticipant[];
   /** Entrées bonus par filleul valide (0 si le giveaway n'a pas d'action de parrainage). */
   referralBonusEntries: number;
+  /** Plafond du bonus de parrainage (`null`/absent avant la version 4). */
+  referralBonusCap?: number | null;
   designations: Designation[];
 }
 
@@ -92,6 +95,13 @@ export interface VerifyRedrawsResult {
  * D'où le recalcul complet des poids à chaque étape, à partir du graphe de parrainage publié.
  */
 export function verifyRedraws(input: VerifyRedrawsInput): VerifyRedrawsResult {
+  // Structure d'abord : ordres uniques, rangs dans [1, winnersCount], remplaçant seulement après un
+  // forfait du même rang. Une chaîne qui ne l'a pas ne se rejoue pas sans ambiguïté — voir
+  // `chainWellFormed`.
+  if (!chainWellFormed(input.designations, input.winnersCount)) {
+    return { ok: false, replayed: 0, poolExhausted: false };
+  }
+
   // Tri défensif : l'ordre gouverne l'ensemble exclu à chaque étape, on ne le prend pas sur parole.
   const ordered = [...input.designations].sort((a, b) => a.order - b.order);
 
@@ -101,6 +111,7 @@ export function verifyRedraws(input: VerifyRedrawsInput): VerifyRedrawsResult {
       validIds,
       participants: input.referrals,
       referralBonusEntries: input.referralBonusEntries,
+      referralBonusCap: input.referralBonusCap ?? null,
     });
 
   // Cascade initiale : la première désignation de chaque rang, prise dans l'ordre des rangs.
@@ -138,14 +149,16 @@ export function verifyRedraws(input: VerifyRedrawsInput): VerifyRedrawsResult {
     }
   }
 
-  // Puis chaque remplaçant, dans l'ordre, sur le pool privé de tout ce qui précède.
-  const initialOrders = new Set(initial.map((d) => d.order));
+  // Puis chaque remplaçant, dans l'ordre, sur le pool privé de tout ce qui précède. Le partage
+  // initiale / remplaçant se fait sur l'IDENTITÉ de la désignation, jamais sur la valeur de son
+  // ordre : c'est ce qui garantit que tout ce qui n'est pas initial est rejoué.
+  const initialSet = new Set<Designation>(initial);
   const designated = new Set<string>();
   let replayed = 0;
   let poolExhausted = false;
 
   for (const d of ordered) {
-    if (initialOrders.has(d.order)) {
+    if (initialSet.has(d)) {
       designated.add(d.participantId);
       continue;
     }
